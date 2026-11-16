@@ -5,10 +5,12 @@
  * Routes (via ?route=...):
  *   GET   /health
  *   GET   /status                   - website open or closed (ERP: Restaurant > Website On/Off)
+ *   GET   /branches/{id}/status     - the same, for one branch (a branch can be closed on its own)
  *   GET   /branches                 - branches the website offers (ERP: Restaurant > Branches)
  *   GET   /branches/{id}/menu       - every branch has its own menu,
  *   GET   /branches/{id}/deals      - deals
  *   GET   /branches/{id}/areas      - and delivery areas
+ *   GET   /branches/{id}/discount   - the website discount the branch gives today
  *   POST  /orders                   - body.branch_id: the branch the customer ordered from
  *   GET   /orders/{orderId}
  *
@@ -103,7 +105,7 @@ const BRANCH_SQL = "SELECT b.id, b.name, b.address, b.phone
  * RestaurantWebsite::getStatus(): Off = closed; On = open, only between the opening and closing time when set
  * (closing before opening = past midnight). No settings table yet = open.
  */
-function websiteStatus(PDO $pdo): array {
+function websiteStatus(PDO $pdo, int $branchId = 0): array {
     try {
         $s = $pdo->query('SELECT * FROM rs_website_settings WHERE id = 1')->fetch();
     } catch (PDOException $e) {
@@ -111,16 +113,68 @@ function websiteStatus(PDO $pdo): array {
     }
     if (!$s) return ['open' => true, 'message' => '', 'opensAt' => null];
 
+    // The branch's own settings (Website On/Off > Branches): switched off, or its own opening hours
+    $b = false;
+    if ($branchId) {
+        try {
+            $st = $pdo->prepare('SELECT rb.*, b.name FROM rs_branches rb JOIN branch b ON b.id = rb.branch_id WHERE rb.branch_id = ?');
+            $st->execute([$branchId]);
+            $b = $st->fetch();
+        } catch (PDOException $e) {
+            $b = false;
+        }
+    }
+
+    // Hours: the branch's own times when it has them, else the website's (website switched off = closed everywhere)
+    $ownHours = $b && $s['is_open'] && (!empty($b['open_time']) || !empty($b['close_time']));
+    $openTime = $ownHours ? $b['open_time'] : $s['open_time'];
+    $closeTime = $ownHours ? $b['close_time'] : $s['close_time'];
+
+    // A branch switched off while the website is on: the customer can pick another branch
+    if ($b && $s['is_open'] && isset($b['website_open']) && !$b['website_open']) {
+        return ['open' => false, 'message' => "{$b['name']} is closed right now. Kindly order from another branch.", 'opensAt' => null, 'branchClosed' => true];
+    }
+
     $now = date('H:i:s');
-    $open = $s['open_time'] ?: '00:00:00';
-    $close = $s['close_time'] ?: '24:00:00';
+    $open = $openTime ?: '00:00:00';
+    $close = $closeTime ?: '24:00:00';
     $isOpen = $s['is_open'] && ($open <= $close ? ($now >= $open && $now < $close) : ($now >= $open || $now < $close));
 
-    $opensAt = $s['open_time'] ? date('g:i A', strtotime($s['open_time'])) : null;
+    $opensAt = $openTime ? date('g:i A', strtotime($openTime)) : null;
+    if ($ownHours) {
+        // Outside the branch's own hours: another branch may be open, so the customer can pick it
+        $message = $opensAt ? "{$b['name']} is closed right now. Kindly visit at $opensAt or order from another branch."
+            : "{$b['name']} is closed right now. Kindly order from another branch.";
+        return ['open' => (bool)$isOpen, 'message' => $isOpen ? '' : $message, 'opensAt' => $opensAt] + ($isOpen ? [] : ['branchClosed' => true]);
+    }
+
     $message = trim((string)$s['closed_message']) !== '' ? trim($s['closed_message'])
         : ($opensAt ? "We're closed right now. Kindly visit at $opensAt." : "We're closed right now. Kindly visit again later.");
 
     return ['open' => (bool)$isOpen, 'message' => $isOpen ? '' : $message, 'opensAt' => $opensAt];
+}
+
+/**
+ * The website discount running today (rs_website_settings, ERP: Restaurant > Website On/Off > Website Discount).
+ * Same rule as RestaurantWebsite::getDiscount(): percent > 0 and today between the From and Till dates (both count,
+ * empty = no limit), and the branch is ticked for it (rs_branches.discount_enabled). onDeals = deals get it too
+ * (false = dishes only). No discount (or no discount columns yet) = ['percent' => 0, 'until' => null, 'onDeals' => true].
+ */
+function websiteDiscount(PDO $pdo, int $branchId): array {
+    try {
+        $s = $pdo->query('SELECT * FROM rs_website_settings WHERE id = 1')->fetch();
+        $st = $pdo->prepare('SELECT * FROM rs_branches WHERE branch_id = ?');
+        $st->execute([$branchId]);
+        $b = $st->fetch();
+        if (!$b || !($b['discount_enabled'] ?? 1)) $s = false;
+    } catch (PDOException $e) {
+        $s = false;
+    }
+    $today = date('Y-m-d');
+    if (!$s || (float)($s['discount_percent'] ?? 0) <= 0 || ($s['discount_from'] && $today < $s['discount_from']) || ($s['discount_to'] && $today > $s['discount_to'])) {
+        return ['percent' => 0, 'until' => null, 'onDeals' => true];
+    }
+    return ['percent' => (float)$s['discount_percent'], 'until' => $s['discount_to'] ?: null, 'onDeals' => (bool)($s['discount_on_deals'] ?? 1)];
 }
 
 /** A branch the website offers, or a 404 */
@@ -265,6 +319,16 @@ try {
         respond($rows);
     }
 
+    // GET /branches/{id}/status  - open or closed for this branch (website closed, or this branch switched off)
+    if ($branchId && $route === '/status') {
+        respond(websiteStatus($pdo, $branchId));
+    }
+
+    // GET /branches/{id}/discount  - the website discount this branch gives today (percent 0 = none)
+    if ($branchId && $route === '/discount') {
+        respond(websiteDiscount($pdo, $branchId));
+    }
+
     // GET /branches/{id}/areas  - the branch's delivery areas for the checkout dropdown, with their charge
     if ($branchId && $route === '/areas') {
         $st = $pdo->prepare('SELECT id, name, delivery_charge, free_over FROM rs_delivery_areas WHERE is_active = 1 AND branch_id = ? ORDER BY sort_order, name');
@@ -320,10 +384,11 @@ try {
 
         // POST /orders  - website places an order
         if (!$code && $method === 'POST') {
-            $status = websiteStatus($pdo);
+            $b = body();
+            // Website closed, or the customer's branch closed on its own
+            $status = websiteStatus($pdo, (int)($b['branch_id'] ?? 0));
             if (!$status['open']) respond(['error' => $status['message']], 423);
 
-            $b = body();
             $c = $b['customer'] ?? [];
             $type = ($b['type'] ?? '') === 'pickup' ? 'pickup' : 'delivery';
             $items = $b['items'] ?? [];
@@ -353,7 +418,7 @@ try {
             $prices = [];
             foreach ($st->fetchAll() as $row) if ($row['available']) $prices[(int)$row['id']] = $row;
 
-            $subtotal = 0; $lines = [];
+            $subtotal = 0; $dealsTotal = 0; $lines = [];
             foreach ($items as $i) {
                 $qty = max(1, min(50, (int)$i['qty']));
 
@@ -361,6 +426,7 @@ try {
                 if (!empty($i['deal_id'])) {
                     foreach (dealLines($pdo, (int)$i['deal_id'], $qty, $branchId) as $line) {
                         $subtotal += $line[2] * $line[3];
+                        $dealsTotal += $line[2] * $line[3];
                         $lines[] = $line;
                     }
                     continue;
@@ -376,15 +442,19 @@ try {
                 // line: [menu id, name, unit price, qty, stock id, attribute id, modifiers, deal id]
                 $lines[] = [$id, $prices[$id]['name'], $unit, $qty, $prices[$id]['erp_stock_id'], $prices[$id]['erp_attribute_id'], $mods, null];
             }
-            // Free above the area's threshold (free_over NULL = never free); pickup has no charge
+            // Website discount: percent off the dishes, and the deals when the ERP says so (never the delivery charge),
+            // worked out here, never in the browser
+            $discount = websiteDiscount($pdo, $branchId);
+            $discountAmount = round(($discount['onDeals'] ? $subtotal : $subtotal - $dealsTotal) * $discount['percent'] / 100, 2);
+            // Free above the area's threshold (free_over NULL = never free), on the amount after discount; pickup has no charge
             $fee = 0.0;
-            if ($area && ($area['free_over'] === null || $subtotal < (float)$area['free_over'])) $fee = (float)$area['delivery_charge'];
-            $total = $subtotal + $fee;
+            if ($area && ($area['free_over'] === null || $subtotal - $discountAmount < (float)$area['free_over'])) $fee = (float)$area['delivery_charge'];
+            $total = $subtotal - $discountAmount + $fee;
 
             $pdo->beginTransaction();
-            $pdo->prepare('INSERT INTO rs_orders (branch_id, order_code, order_type, customer_name, customer_phone, customer_address, delivery_area, notes, subtotal, delivery_fee, total, status, source)
-                           VALUES (?, "", ?, ?, ?, ?, ?, ?, ?, ?, ?, "received", "website")')
-                ->execute([$branchId, $type, $c['name'], $c['phone'], $c['address'] ?? '', $area['name'] ?? null, $b['notes'] ?? '', $subtotal, $fee, $total]);
+            $pdo->prepare('INSERT INTO rs_orders (branch_id, order_code, order_type, customer_name, customer_phone, customer_address, delivery_area, notes, subtotal, discount_percent, discount_amount, discount_on_deals, delivery_fee, total, status, source)
+                           VALUES (?, "", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "received", "website")')
+                ->execute([$branchId, $type, $c['name'], $c['phone'], $c['address'] ?? '', $area['name'] ?? null, $b['notes'] ?? '', $subtotal, $discount['percent'], $discountAmount, $discount['onDeals'] ? 1 : 0, $fee, $total]);
             $orderId = (int)$pdo->lastInsertId();
             $orderCode = 'ORD-' . (1000 + $orderId);
             $pdo->prepare('UPDATE rs_orders SET order_code = ? WHERE id = ?')->execute([$orderCode, $orderId]);
@@ -399,6 +469,7 @@ try {
 
             respond(['orderId' => $orderCode, 'status' => 'received', 'type' => $type, 'area' => $area['name'] ?? null,
                      'branch' => ['id' => $branchId, 'name' => $branch['name']],
+                     'subtotal' => $subtotal, 'discountPercent' => $discount['percent'], 'discount' => $discountAmount,
                      'deliveryFee' => $fee, 'total' => $total, 'createdAt' => date(DATE_ATOM)], 201);
         }
 

@@ -58,6 +58,7 @@ foreach (RestaurantOrder::getItems($Order['id']) as $Item)
         'qty' => (int)$Item['qty'],
         // lines with modifiers or from a deal stay their own line
         'fixed' => !empty($Modifiers) || !empty($Item['deal_id']),
+        'deal' => !empty($Item['deal_id']),
         'note' => trim((!empty($Item['deal_id']) ? 'Deal ' : '') . implode(', ', $Modifiers)),
     ];
 }
@@ -148,9 +149,12 @@ include_once("../includes/inc_header.php");
         <div class="pos-cart-foot">
             <div class="pos-sum-row"><span>Items</span><span id="pos_cart_qty">0</span></div>
             <div class="pos-sum-row"><span>Sub Total</span><span id="pos_cart_subtotal">0.00</span></div>
+            <? if (($Order['discount_percent'] ?? 0) > 0) { ?>
+                <div class="pos-sum-row text-success"><span>Discount (<?=(float)$Order['discount_percent']?>%<?=($Order['discount_on_deals'] ?? 1) ? '' : ', deals excluded'?>)</span><span id="pos_cart_discount">0.00</span></div>
+            <? } ?>
             <? if (!$isPickup) { ?>
                 <div class="pos-sum-row align-items-center">
-                    <span>Delivery</span>
+                    <span>Delivery (rider)</span>
                     <input type="number" class="form-control form-control-sm text-right" style="max-width: 110px" id="delivery_fee" name="delivery_fee" form="order_edit_form" value="<?=(float)$Order['delivery_fee']?>" min="0" step="any">
                 </div>
             <? } ?>
@@ -171,8 +175,10 @@ include_once("../includes/inc_header.php");
 <script>
     window.ORDER_EDIT_CONFIG = {
         catalogs: <?=json_encode($Catalogs, $JsonFlags)?>,
-        cart: <?=json_encode($Cart, $JsonFlags)?>
+        cart: <?=json_encode($Cart, $JsonFlags)?>,
+        discountPercent: <?=(float)($Order['discount_percent'] ?? 0)?>,
+        discountOnDeals: <?=($Order['discount_on_deals'] ?? 1) ? 'true' : 'false'?>
     };
 </script>
-<script src="<?=ProjectHelper::SiteURL()?>js/restaurant/web_order_edit.js?v=2"></script>
+<script src="<?=ProjectHelper::SiteURL()?>js/restaurant/web_order_edit.js?v=4"></script>
 <? include_once("../includes/inc_footer.php"); ?>

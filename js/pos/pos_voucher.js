@@ -1,6 +1,6 @@
 /**
  * POS - Order Invoice Voucher screen (pos/pos_voucher.php)
- * Server data comes from window.POS_CONFIG: catalog, cart, isView, deliveryFee (Website Invoice), isDineIn (Table No), posUrl
+ * Server data comes from window.POS_CONFIG: catalog, cart, isView, deliveryFee + invoiceDiscount (Website Invoice), isDineIn (Table No), posUrl
  */
 $(function () {
     var CONFIG = window.POS_CONFIG || {};
@@ -164,7 +164,13 @@ $(function () {
         $("#pos_fab_count").text(CART.length);
         $("#pos_cart_qty").text(qty);
         $("#pos_cart_subtotal").text(money(total));
-        $("#pos_cart_total, #pos_fab_total").text(money(total + (parseFloat(CONFIG.deliveryFee) || 0)));
+        // invoice discount (Website Invoice with the website discount) and old invoices' delivery (transport)
+        var billTotal = total - (parseFloat(CONFIG.invoiceDiscount) || 0) + (parseFloat(CONFIG.deliveryFee) || 0);
+        // WhatsApp / Website Invoice: the delivery area's charge is on the bill (the rider's, not in the invoice)
+        var delivery = areaCharge(billTotal);
+        $("#pos_delivery_row").toggle(delivery !== null);
+        $("#pos_delivery_charge").text(delivery === 0 ? "Free" : money(delivery || 0));
+        $("#pos_cart_total, #pos_fab_total").text(money(billTotal + (delivery || 0)));
         $("#pos_save").prop("disabled", !CART.length);
         refreshCardActions();
     }
@@ -249,6 +255,16 @@ $(function () {
         return true;
     }
 
+    /** Charge of the chosen delivery area for this bill amount (free from its "free over"), null for pickup / no area */
+    function areaCharge(amount) {
+        if (!CONFIG.hasOrderInfo || $("#order_type").val() === "pickup") return null;
+        var $opt = $("#delivery_area_id option:selected");
+        if (!$opt.length || ($opt.val() === "" && !$opt.data("charge"))) return null;
+        var freeOver = $opt.data("free-over");
+        if (freeOver !== "" && freeOver !== undefined && amount >= parseFloat(freeOver)) return 0;
+        return parseFloat($opt.data("charge")) || 0;
+    }
+
     function receiptHtml(res) {
         var rows = CART.map(function (l) {
             return '<tr><td>' + $('<span>').text(l.name).html() + ' <small class="text-muted">x ' + l.qty + '</small></td><td class="text-right">' + money(l.qty * l.price) + '</td></tr>';
@@ -257,7 +273,9 @@ $(function () {
         return '<div class="pos-receipt">' +
             '<div class="mb-2"><b>' + $('<span>').text(res.voucher_name).html() + '</b> &middot; ' + $('<span>').text($("#customer_id").val()).html() +
             (IS_DINE_IN ? ' &middot; Table ' + $('<span>').text($("#table_no").val()).html() : '') + '</div>' +
-            '<table>' + rows + '<tr class="tot"><td>Total</td><td class="text-right">' + money(res.total) + '</td></tr></table></div>';
+            '<table>' + rows +
+            (res.delivery_charges > 0 ? '<tr><td>Delivery</td><td class="text-right">' + money(res.delivery_charges) + '</td></tr>' : '') +
+            '<tr class="tot"><td>Total</td><td class="text-right">' + money(res.total + (res.delivery_charges || 0)) + '</td></tr></table></div>';
     }
 
     var SAVED_KEY = 'pos_saved_notification';
@@ -398,7 +416,14 @@ $(function () {
     $("#branch_id").on("autocompleteselect", function (e, ui) { loadMenuStatus(ui.item.id); });
 
     if (IS_VIEW)
-        $("#pos_form input").prop("disabled", true);
+        $("#pos_form input, #pos_form select").prop("disabled", true);
+
+    // Order type / delivery area change the delivery charge on the bill
+    $("#order_type").on("change", function () {
+        $("#delivery_area_box").toggle(this.value !== "pickup");
+        renderCart();
+    });
+    $("#delivery_area_id").on("change", renderCart);
 
     setMenuStatus(CONFIG.menuStatus);   // POS menu of the page's warehouse, sent with the page
     renderCart();

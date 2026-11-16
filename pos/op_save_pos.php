@@ -45,6 +45,10 @@ if (!isset($_POST['btn_delete']))
         $Errors[] = 'Please select warehouse';
     if ($isDineIn and trim($_POST['table_no'] ?? '') == '')
         $Errors[] = 'Please enter table no';
+    // WhatsApp Invoice delivery: the charge comes from the delivery area set in Restaurant > Delivery Areas
+    if (SalesOrderInfo::isOrderInfoVoucherType($VoucherTypeId) and ($_POST['order_type'] ?? '') != SalesOrderInfo::TYPE_PICKUP
+        and !isset(SalesOrderInfo::getAreas()[(int) ($_POST['delivery_area_id'] ?? 0)]))
+        $Errors[] = 'Please choose the delivery area';
     if (empty($CartRows))
         $Errors[] = 'Cart is empty';
 
@@ -124,6 +128,18 @@ if ($oSales->isVoucherCreatedSuccessfully())
     if ($isDineIn)
         SalesPOS::saveTableNo($oSales->getVoucherId(), $_POST['table_no']);
 
+    // WhatsApp Invoice: delivery or pickup, and the area's delivery charge on this bill (the rider's: printed on the bill,
+    // kept apart from the invoice / Sales). Worked out here from the area's setting, never taken from the browser.
+    $DeliveryCharges = 0;
+    if (SalesOrderInfo::isOrderInfoVoucherType($VoucherTypeId))
+    {
+        $Area = SalesOrderInfo::getAreas()[(int) ($_POST['delivery_area_id'] ?? 0)] ?? null;
+        $DeliveryCharges = $Area ? SalesOrderInfo::chargeFor($Area, $CartTotal) : 0;
+        SalesOrderInfo::save($oSales->getVoucherId(), $_POST['order_type'] ?? '', $DeliveryCharges, $Area['id'] ?? null, $Area['name'] ?? null);
+        if (($_POST['order_type'] ?? '') == SalesOrderInfo::TYPE_PICKUP)
+            $DeliveryCharges = 0;
+    }
+
     $oSales->performTransactions();
 }
 
@@ -154,6 +170,8 @@ posResponse([
     'voucher_number' => $oSales->getVoucherNumber(),
     'voucher_name' => VoucherType::getCode($VoucherTypeId)."-".$oSales->getVoucherNumber(),
     'total' => (float) DBQM::result(DBQM::query("SELECT voucher_total FROM distinct_id WHERE id = ".escape($oSales->getDistinctId(), 'int')), 0),
+    // on the bill only, not in the invoice total
+    'delivery_charges' => (float) $DeliveryCharges,
     'print_url' => ProjectHelper::SiteURL()."pos/print_voucher.php?id=".$VoucherId."&voucher_type_id=".$VoucherTypeId,
     'is_edit' => !empty($_POST['voucher_id']),
     'next_token' => bin2hex(random_bytes(16)),

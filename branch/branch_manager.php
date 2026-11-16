@@ -71,6 +71,15 @@ include_once("../includes/inc_header.php");
                             </select>
                         </div>
                     </div>
+                    <div class="col-12">
+                        <div class="form-group">
+                            <div class="custom-control custom-switch" dir="ltr">
+                                <input type="checkbox" class="custom-control-input" id="show_on_website" name="show_on_website" value="Y" <?=RestaurantBranch::isOnWebsite($oBranch->getVoucherId()) ? 'checked' : ''?>>
+                                <label class="custom-control-label font-weight-bold" for="show_on_website">Show on website</label>
+                            </div>
+                            <small class="text-muted">Customers can pick this branch on the restaurant website. Set up its menu and delivery areas in Restaurant first.</small>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

@@ -27,6 +27,22 @@ while ($Row = DBQM::fetch_assoc($Select)) {
 }
 $num_rows = count($RowsArray);
 $mean = $num_rows > 0 ? $Total / $num_rows : 0;
+
+// Website / WhatsApp Invoices: delivery or pickup, and the delivery charges in their own column
+// (the rider's: on the bill, but not in Voucher Total / Sales)
+$hasOrderInfo = SalesOrderInfo::isOrderInfoVoucherType($_GET['voucher_type_id']);
+$OrderInfo = $hasOrderInfo ? SalesOrderInfo::getMany(array_column($RowsArray, 'id')) : [];
+$OrderTypes = SalesOrderInfo::getTypes();
+$TypeCounts = [SalesOrderInfo::TYPE_DELIVERY => 0, SalesOrderInfo::TYPE_PICKUP => 0];
+$TotalDeliveryCharges = 0;
+foreach ($RowsArray as $Row)
+{
+    $Info = $OrderInfo[(int)$Row['id']] ?? null;
+    if (!$Info || $Row['is_deleted'] == 'Y')
+        continue;
+    $TypeCounts[$Info['order_type']]++;
+    $TotalDeliveryCharges += $Info['delivery_charges'];
+}
 ?>
 <style>
     .bg-danger td {
@@ -308,7 +324,13 @@ $mean = $num_rows > 0 ? $Total / $num_rows : 0;
                             <th>Voucher Number</th>
                             <th>Date</th>
                             <th>Customer</th>
+                            <? if ($hasOrderInfo) { ?>
+                                <th>Order Type</th>
+                            <? } ?>
                             <th >Voucher Total</th>
+                            <? if ($hasOrderInfo) { ?>
+                                <th class="text-right">Delivery Charges</th>
+                            <? } ?>
                             <th class="text-right">Created by</th>
                             <th class="text-right">Voucher Status</th>
                             <th class="text-right"><i class="fas fa-cog"></i> Actions</th>
@@ -321,7 +343,20 @@ $mean = $num_rows > 0 ? $Total / $num_rows : 0;
                             <td><?=$Row['voucher_prefix'].'-'.$Row['voucher_number']?></td>
                             <td><?=DateDecode($Row['voucher_date'], 'l, M d, Y')?></td>
                             <td><?=$Row['customer_name']?></td>
+                            <? if ($hasOrderInfo) { $Info = $OrderInfo[(int)$Row['id']] ?? null; ?>
+                                <td>
+                                    <? if ($Info) { ?>
+                                        <span class="badge badge-soft-<?=$Info['order_type'] == SalesOrderInfo::TYPE_PICKUP ? 'info' : 'primary'?>"><i class="mdi <?=$Info['order_type'] == SalesOrderInfo::TYPE_PICKUP ? 'mdi-shopping-outline' : 'mdi-moped'?>"></i> <?=$OrderTypes[$Info['order_type']]?></span>
+                                        <? if ($Info['delivery_area'] !== '') { ?><small class="text-muted d-block"><?=htmlspecialchars($Info['delivery_area'])?></small><? } ?>
+                                    <? } else { ?>
+                                        <span class="text-muted">-</span>
+                                    <? } ?>
+                                </td>
+                            <? } ?>
                             <td class="text-right" data-js="voucher_total"><?=Utils::format($Row['voucher_total'], 2)?></td>
+                            <? if ($hasOrderInfo) { ?>
+                                <td class="text-right"><?=$Info && $Info['delivery_charges'] > 0 ? Utils::format($Info['delivery_charges'], 2) : '-'?></td>
+                            <? } ?>
                             <td class="text-right font-weight-bolder"><?=$Row['created_by']?></td>
                             <td class="text-right"><? $oSales->getVoucherStatus($Row); ?></td>
                             <td class="text-right report-actions">
@@ -335,8 +370,14 @@ $mean = $num_rows > 0 ? $Total / $num_rows : 0;
                     </tbody>
                     <tfoot>
                     <tr>
-                        <td colspan="4" class="text-right font-weight-bold display-6" style="color: #000035; vertical-align: middle;">Grand Total:</td>
+                        <td colspan="<?=$hasOrderInfo ? 5 : 4?>" class="text-right font-weight-bold display-6" style="color: #000035; vertical-align: middle;">
+                            <? if ($hasOrderInfo) { ?><small class="text-muted font-weight-normal mr-3"><?=$TypeCounts['delivery']?> Delivery &middot; <?=$TypeCounts['pickup']?> Pickup</small><? } ?>
+                            Grand Total:
+                        </td>
                         <td class="text-right font-weight-bold display-6 text-success" style="vertical-align: middle;"><?=Utils::format($Total, 2)?></td>
+                        <? if ($hasOrderInfo) { ?>
+                            <td class="text-right font-weight-bold" style="vertical-align: middle;"><?=Utils::format($TotalDeliveryCharges, 2)?></td>
+                        <? } ?>
                         <td>&nbsp;</td>
                         <td>&nbsp;</td>
                         <td>&nbsp;</td>

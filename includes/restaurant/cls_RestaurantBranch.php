@@ -10,9 +10,37 @@ class RestaurantBranch
 {
     const SESSION_KEY = '__restaurant_branch_id';
 
+    /**
+     * Gives every branch of the ERP (branch table) its rs_branches row; new branches start off the website.
+     * The trigger trg_branch_rs_branches (migration 008) does the same on insert; this covers servers without it.
+     */
+    static function syncFromBranches()
+    {
+        DBQM::query("INSERT IGNORE INTO rs_branches (branch_id, show_on_website, sort_order) SELECT b.id, 0, b.id FROM branch b");
+    }
+
+    /** Is the branch offered on the restaurant website? (rs_branches.show_on_website) */
+    static function isOnWebsite($BranchId)
+    {
+        return !empty($BranchId) && (bool)DBQM::result(DBQM::query("SELECT COUNT(*) FROM rs_branches WHERE show_on_website = 1 AND branch_id = " . escape($BranchId, 'int')), 0);
+    }
+
+    /** Shows or hides one branch on the restaurant website (Branch form: Stock > Branch), keeping its other website settings */
+    static function setOnWebsite($BranchId, bool $Show)
+    {
+        if (empty($BranchId))
+            return;
+
+        DBQM::query("INSERT INTO rs_branches (branch_id, show_on_website, sort_order)
+                     VALUES (" . escape($BranchId, 'int') . ", " . ($Show ? 1 : 0) . ", " . escape($BranchId, 'int') . ")
+                     ON DUPLICATE KEY UPDATE show_on_website = VALUES(show_on_website)");
+    }
+
     /** Every branch of the company with its website settings */
     static function getAll()
     {
+        self::syncFromBranches();
+
         return DBQM::query("
             SELECT b.id, b.name, b.address, b.phone, b.is_active,
                    COALESCE(rb.show_on_website, 0) AS show_on_website, COALESCE(rb.sort_order, 0) AS sort_order,

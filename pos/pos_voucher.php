@@ -64,6 +64,14 @@ $CustomerAccountId = $isLoadData ? $RowDetails['customer_account_id'] : getConst
 $BranchId = $isLoadData ? $RowDetails['branch_id'] : (($_SESSION['__branch_id'] ?? '') ?: RestaurantBranch::getCurrentId());
 $VoucherDate = $isEdit ? date('m/d/Y', strtotime($RowDetails['voucher_date'])) : '';
 $TableNo = $isDineIn && $isLoadData ? SalesPOS::getTableNo($oSales->getVoucherId()) : '';
+// WhatsApp / Website Invoice: delivery or pickup, and the delivery charges the rider keeps (not part of the invoice)
+$hasOrderInfo = SalesOrderInfo::isOrderInfoVoucherType($VoucherTypeId);
+$OrderInfo = $isLoadData ? SalesOrderInfo::get($oSales->getVoucherId()) : SalesOrderInfo::get(0);
+$OrderType = $OrderInfo['order_type'] ?: SalesOrderInfo::TYPE_DELIVERY;
+// Delivery charge comes from the area set in Restaurant > Delivery Areas; area names get their branch when several branches have areas
+$DeliveryAreas = $hasOrderInfo ? SalesOrderInfo::getAreas() : [];
+$showAreaBranch = count(array_unique(array_column($DeliveryAreas, 'branch_id'))) > 1;
+$InvoiceDiscount = (float) ($RowDetails['invoice_discount_calc_value'] ?? 0);
 
 $Catalog = SalesPOS::getCatalog();
 
@@ -114,6 +122,37 @@ include_once("../includes/inc_header.php");
                 </div>
             </div>
         </div>
+        <? if ($hasOrderInfo) { ?>
+            <div class="row align-items-end mt-2">
+                <div class="col-xl-2 col-md-4 col-sm-6">
+                    <div class="form-group mb-xl-0">
+                        <label for="order_type">Order Type</label>
+                        <select id="order_type" name="order_type" class="form-control"><? Utils::getDropDownOptionsFromArray(SalesOrderInfo::getTypes(), $OrderType); ?></select>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-md-4 col-sm-6" id="delivery_area_box" <?=$OrderType == SalesOrderInfo::TYPE_PICKUP ? 'style="display:none"' : ''?>>
+                    <div class="form-group mb-xl-0">
+                        <label for="delivery_area_id">Delivery Area</label>
+                        <select id="delivery_area_id" name="delivery_area_id" class="form-control">
+                            <option value="" data-charge="0">Choose area</option>
+                            <? foreach ($DeliveryAreas as $Area) { ?>
+                                <option value="<?=$Area['id']?>" data-charge="<?=$Area['charge']?>" data-free-over="<?=$Area['free_over'] === null ? '' : $Area['free_over']?>" <?=$OrderInfo['delivery_area_id'] == $Area['id'] ? 'selected' : ''?>>
+                                    <?=htmlspecialchars($Area['name'] . ($showAreaBranch ? ' (' . $Area['branch_name'] . ')' : ''))?> &middot; <?=Utils::format($Area['charge'], 0)?>
+                                </option>
+                            <? } ?>
+                            <? if ($OrderInfo['delivery_area'] !== '' && !isset($DeliveryAreas[(int)$OrderInfo['delivery_area_id']])) { ?>
+                                <option value="" data-charge="<?=$OrderInfo['delivery_charges']?>" selected><?=htmlspecialchars($OrderInfo['delivery_area'])?> &middot; <?=Utils::format($OrderInfo['delivery_charges'], 0)?></option>
+                            <? } ?>
+                        </select>
+                    </div>
+                </div>
+                <div class="col-xl-7 col-md-4">
+                    <small class="text-muted">
+                        <? if (!$DeliveryAreas) { ?>No delivery areas yet: add them in Restaurant &gt; Delivery Areas.<? } else { ?>Delivery charge comes from the area (Restaurant &gt; Delivery Areas). It is printed on the bill and goes to the rider: not in the invoice, Sales or the report.<? } ?>
+                    </small>
+                </div>
+            </div>
+        <? } ?>
     </div>
 
     <input type="hidden" name="voucher_date" id="voucher_date" value="<?=$VoucherDate?>">
@@ -159,10 +198,17 @@ include_once("../includes/inc_header.php");
         <div class="pos-cart-foot">
             <div class="pos-sum-row"><span>Items</span><span id="pos_cart_qty">0</span></div>
             <div class="pos-sum-row"><span>Sub Total</span><span id="pos_cart_subtotal">0.00</span></div>
+            <? if ($InvoiceDiscount > 0) { ?>
+                <div class="pos-sum-row text-success"><span>Discount<?=(float) $RowDetails['invoice_discount_percentage'] > 0 ? ' ('.(float) $RowDetails['invoice_discount_percentage'].'%)' : ''?></span><span>-<?=Utils::format($InvoiceDiscount, 2)?></span></div>
+            <? } ?>
+            <? if ($hasOrderInfo) { ?>
+                <div class="pos-sum-row" id="pos_delivery_row" style="display:none"><span>Delivery</span><span id="pos_delivery_charge">0.00</span></div>
+            <? } ?>
             <? if ((float) ($RowDetails['transport_amount'] ?? 0) > 0) { ?>
                 <div class="pos-sum-row"><span>Delivery</span><span><?=Utils::format($RowDetails['transport_amount'], 2)?></span></div>
             <? } ?>
             <div class="pos-sum-total"><span>Total</span><span><small><?=ProjectHelper::DEFAULT_CURRENCY?></small> <b id="pos_cart_total">0.00</b></span></div>
+
             <? if (!$isView) { ?>
                 <button type="button" class="btn color btn-block pos-save" id="pos_save" disabled><i class="mdi mdi-check-circle-outline"></i> <?=$isEdit ? 'Update Order' : 'Save Order'?></button>
                 <? if ($isEdit) { ?>
@@ -186,11 +232,13 @@ include_once("../includes/inc_header.php");
         cart: <?=json_encode($Cart, $JsonFlags)?>,
         isView: <?=$isView ? 'true' : 'false'?>,
         deliveryFee: <?=(float) ($RowDetails['transport_amount'] ?? 0)?>,
+        invoiceDiscount: <?=$InvoiceDiscount?>,
+        hasOrderInfo: <?=$hasOrderInfo ? 'true' : 'false'?>,
         branchId: <?=(int) $BranchId?>,
         menuStatus: <?=json_encode(SalesPOS::getMenuStatus($BranchId), $JsonFlags)?>,
         isDineIn: <?=$isDineIn ? 'true' : 'false'?>,
         posUrl: <?=json_encode(VoucherType::getLink($isWebsiteInvoice ? VoucherType::OIV : $VoucherTypeId), $JsonFlags)?>
     };
 </script>
-<script src="<?=ProjectHelper::SiteURL()?>js/pos/pos_voucher.js?v=8"></script>
+<script src="<?=ProjectHelper::SiteURL()?>js/pos/pos_voucher.js?v=10"></script>
 <? include_once("../includes/inc_footer.php"); ?>

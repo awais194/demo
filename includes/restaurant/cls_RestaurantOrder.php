@@ -246,6 +246,11 @@ class RestaurantOrder
         }
 
         $Subtotal = (float)DBQM::result(DBQM::query("SELECT COALESCE(SUM(qty * unit_price), 0) FROM rs_order_items WHERE order_id = " . escape($OrderId, 'int')), 0);
+        // The website discount the order was placed with stays on the new subtotal (without the deals when they were excluded)
+        $DiscountBase = $Subtotal;
+        if (!($Order['discount_on_deals'] ?? 1))
+            $DiscountBase -= (float)DBQM::result(DBQM::query("SELECT COALESCE(SUM(qty * unit_price), 0) FROM rs_order_items WHERE deal_id IS NOT NULL AND order_id = " . escape($OrderId, 'int')), 0);
+        $DiscountAmount = self::discountAmount($DiscountBase, $Order['discount_percent'] ?? 0);
 
         DBQM::query("UPDATE rs_orders SET
                         branch_id = " . escape($BranchId, 'int') . ",
@@ -254,8 +259,9 @@ class RestaurantOrder
                         customer_address = " . escape(mb_substr(trim($Data['customer_address'] ?? ''), 0, 255)) . ",
                         notes = " . escape(mb_substr(trim($Data['notes'] ?? ''), 0, 255)) . ",
                         subtotal = " . escape($Subtotal) . ",
+                        discount_amount = " . escape($DiscountAmount) . ",
                         delivery_fee = " . escape($DeliveryFee) . ",
-                        total = " . escape($Subtotal + $DeliveryFee) . "
+                        total = " . escape($Subtotal - $DiscountAmount + $DeliveryFee) . "
                      WHERE id = " . escape($OrderId, 'int') . " AND status = " . escape(self::STATUS_RECEIVED));
 
         $Connection->commit();
@@ -298,6 +304,12 @@ class RestaurantOrder
         return [false, $Order['order_code'] . " marked completed but the invoice was not created: " . $Result['error']];
     }
 
+    /** Website discount on a subtotal, rounded like the API (restaurant_bridge/api/index.php) */
+    static function discountAmount($Subtotal, $Percent)
+    {
+        return round((float)$Subtotal * (float)$Percent / 100, 2);
+    }
+
     /* ************************* Website Invoice ************************* */
     static function toSalesData(array $Order)
     {
@@ -313,7 +325,11 @@ class RestaurantOrder
             'phone' => $Order['customer_phone'],
             'address' => $Order['customer_address'],
             'notes' => $Order['notes'],
+            'order_type' => $Order['order_type'],
+            'delivery_area' => $Order['delivery_area'],
             'delivery_fee' => $Order['delivery_fee'],
+            'discount_amount' => $Order['discount_amount'] ?? 0,
+            'discount_percent' => $Order['discount_percent'] ?? 0,
             'items' => $Items,
         ];
     }
@@ -321,8 +337,11 @@ class RestaurantOrder
     /**
      * Saves the order as a Website Invoice (WIV) with the ERP's own Sales class, all or nothing.
      * Linked dishes (stock_id) are sold from stock; the rest go as non-inventory lines.
+     * The website discount goes as invoice discount. Delivery charges are the rider's: they are not part of the invoice
+     * (not posted to Sales) and are kept with the order type in sl_sales_order_info for the reports.
      *
-     * @param array $Order order_code, name, phone, address, notes, delivery_fee, items[stock_id, attribute_id, name, qty, price],
+     * @param array $Order order_code, name, phone, address, notes, order_type, delivery_fee, discount_amount, discount_percent,
+     *                     items[stock_id, attribute_id, name, qty, price],
      *                     optional customer_account_id / branch_id (default: restaurant_bridge/config.php)
      * @return array ['salesId', 'distinctId', 'voucherNumber', 'existing'?] or ['error', 'details']
      */
@@ -358,6 +377,9 @@ class RestaurantOrder
             '__restaurant_order_code' => $Order['order_code'],
         ];
 
+        $DiscountAmount = round(max(0, (float)($Order['discount_amount'] ?? 0)), 2);
+        $DiscountPercent = $DiscountAmount > 0 ? round((float)($Order['discount_percent'] ?? 0), 2) : 0;
+
         $Connection = DatabaseHelper::getConnection();
         $Connection->begin_transaction();
 
@@ -372,12 +394,14 @@ class RestaurantOrder
             $Description,
             $BranchId,
             Sales::TYPE_INVOICE,
-            0, 0, 0,                             // invoice discount amount / % / calc
+            $DiscountAmount,                     // invoice discount amount
+            $DiscountPercent,                    // invoice discount %
+            $DiscountAmount,                     // invoice discount calc (what Sales::performTransactions() posts)
             0, 0,                                // gst % / calc
             '',                                  // sales_man_id
             $Order['name'] ?? '',
             $Order['phone'] ?? '',
-            (float)($Order['delivery_fee'] ?? 0) // transport_amount
+            0                                    // transport_amount: delivery charges are the rider's, not Sales
         ]);
 
         if ($oSales->isVoucherCreatedSuccessfully())
@@ -400,6 +424,8 @@ class RestaurantOrder
                 $Order['phone'] ?? '',
                 $Order['notes'] ?? '',
             ], Sales::IND_DELIVERY);
+
+            SalesOrderInfo::save($oSales->getVoucherId(), $Order['order_type'] ?? 'delivery', $Order['delivery_fee'] ?? 0, null, $Order['delivery_area'] ?? null);
 
             $oSales->performTransactions();
         }

@@ -987,6 +987,7 @@ $oHeaderBranch = new Branch();
                             <? $oHeaderUtils->menuReport('Deals', 'restaurant/deals.php'); ?>
                             <? $oHeaderUtils->menuReport('Deals Report', 'restaurant/deals_report.php'); ?>
                             <? $oHeaderUtils->menuReport('Delivery Areas', 'restaurant/delivery_areas.php'); ?>
+                            <? $oHeaderUtils->menuReport('Website On/Off', 'restaurant/website_status.php'); ?>
                         </ul>
                     </li>
 

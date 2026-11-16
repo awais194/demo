@@ -58,6 +58,11 @@ $Discount = (float) $RowDetails['invoice_discount_calc_value'];
 $Tax = (float) $RowDetails['gst_calc_value'];
 $NetAmount = $GrossAmount - $Discount + $Tax + (float) $RowDetails['transport_amount'];
 
+// WhatsApp / Website Invoice: delivery or pickup, and the area's delivery charge. It is on the bill (customer pays it,
+// rider keeps it) but not in the invoice total / Sales.
+$OrderInfo = SalesOrderInfo::isOrderInfoVoucherType($_GET['voucher_type_id']) ? SalesOrderInfo::get($oSales->getVoucherId()) : SalesOrderInfo::get(0);
+$NetAmount += $OrderInfo['delivery_charges'];
+
 function posMoney($Value)
 {
     return number_format((float) $Value, 2);
@@ -154,6 +159,7 @@ function posMoney($Value)
         <? if ($Discount > 0) { ?><tr><td>Discount</td><td class="right">-<?=posMoney($Discount)?></td></tr><? } ?>
         <? if ($Tax > 0) { ?><tr><td><?=ProjectHelper::TAX_LABEL?></td><td class="right"><?=posMoney($Tax)?></td></tr><? } ?>
         <? if ($RowDetails['transport_amount'] > 0) { ?><tr><td>Delivery</td><td class="right"><?=posMoney($RowDetails['transport_amount'])?></td></tr><? } ?>
+        <? if ($OrderInfo['delivery_charges'] > 0) { ?><tr><td>Delivery<?=$OrderInfo['delivery_area'] !== '' ? ' ('.htmlspecialchars($OrderInfo['delivery_area']).')' : ''?></td><td class="right"><?=posMoney($OrderInfo['delivery_charges'])?></td></tr><? } ?>
         <tr class="grand"><td>TOTAL <?=ProjectHelper::DEFAULT_CURRENCY?></td><td class="right"><?=posMoney($NetAmount)?></td></tr>
     </table>
     <div class="dash"></div>

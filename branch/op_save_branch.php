@@ -18,6 +18,10 @@ if ($oBranch->isValidFormSubmission())
             $_POST['is_warehouse'],
             $_POST['is_active']
         ]);
+
+        // Restaurant website row of the branch (rs_branches), shown on the website or not ("Show on website" switch)
+        RestaurantBranch::syncFromBranches();
+        RestaurantBranch::setOnWebsite($oBranch->getVoucherId(), ($_POST['show_on_website'] ?? '') === 'Y');
     }
     else
         $oBranch->deleteFormData();

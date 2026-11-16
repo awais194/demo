@@ -156,7 +156,13 @@ $(function () {
         $("#pos_fab_count").text(CART.length);
         $("#pos_cart_qty").text(qty);
         $("#pos_cart_subtotal").text(money(total));
-        $("#pos_cart_total, #pos_fab_total").text(money(total + deliveryFee()));
+        // website discount the order was placed with, on the new subtotal (same rounding as RestaurantOrder::discountAmount())
+        var discountBase = window.ORDER_EDIT_CONFIG.discountOnDeals === false
+            ? CART.reduce(function (sum, l) { return sum + (l.deal ? 0 : l.qty * l.price); }, 0)
+            : total;
+        var discount = Math.round(discountBase * (parseFloat(window.ORDER_EDIT_CONFIG.discountPercent) || 0)) / 100;
+        $("#pos_cart_discount").text("-" + money(discount));
+        $("#pos_cart_total, #pos_fab_total").text(money(total - discount + deliveryFee()));
         $("#pos_save").prop("disabled", !CART.length);
         refreshCardActions();
     }

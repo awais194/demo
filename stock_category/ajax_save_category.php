@@ -34,12 +34,26 @@ $oStockCategory->initForEdit();
            saveData();
        });
     });
+    // Small notification in the top right corner (SweetAlert2, loaded by inc_header.php)
+    function categoryToast(icon, title)
+    {
+        Swal.fire({toast: true, position: "top-end", icon: icon, title: title, showConfirmButton: false, timer: 3000, timerProgressBar: true});
+    }
+
     function saveData()
     {
+        if ($.trim($("#new_name").val()) === '')
+        {
+            categoryToast("error", "Please enter the category name");
+            $("#new_name").focus();
+            return;
+        }
+
         FormHelper.nameToIdConvert();
         var data = $(".auto_account").serialize();
 
         FormHelper.idToNameConvert();
+        $("#btn_auto_save").prop("disabled", true);
         $.ajax({
             url:SiteURL+"stock_category/op_auto_save_category.php",
             method:"POST",
@@ -47,13 +61,27 @@ $oStockCategory->initForEdit();
             dataType:"json",
             success: function(data)
             {
-                if(data != '')
+                if(data && data.category_id)
                 {
                     $('input[data-auto-select="Y"]').attr("data-ac-id", data.category_id);
                     $('input[data-auto-select="Y"]').attr("data-ac-value", data.category_name);
                     $('input[data-auto-select="Y"]').val(data.category_name);
                     $('input[data-auto-select="Y"]').trigger("blur");
+
+                    // close the slide popup and confirm
+                    $(".slide-popup [data-slider-close-btn]").first().trigger("click");
+                    categoryToast("success", "Category " + data.category_name + " saved successfully");
                 }
+                else
+                    categoryToast("error", (data && data.error) || "Category was not saved. Please try again.");
+            },
+            error: function()
+            {
+                categoryToast("error", "Category was not saved. Please try again.");
+            },
+            complete: function()
+            {
+                $("#btn_auto_save").prop("disabled", false);
             }
         });
     }

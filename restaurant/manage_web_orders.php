@@ -189,8 +189,11 @@ function filterUrl($Status, $Type) { return 'manage_web_orders.php?filter=' . ur
                                 <td class="text-right text-nowrap"><?=number_format($Item['qty'] * $Item['unit_price'])?></td>
                             </tr>
                         <? } ?>
+                        <? if (($Order['discount_amount'] ?? 0) > 0) { ?>
+                            <tr><td class="text-muted">Discount (<?=(float)$Order['discount_percent']?>%<?=($Order['discount_on_deals'] ?? 1) ? '' : ', deals excluded'?>)</td><td class="text-right text-nowrap text-success">-<?=number_format($Order['discount_amount'])?></td></tr>
+                        <? } ?>
                         <? if ($Order['delivery_fee'] > 0) { ?>
-                            <tr><td class="text-muted">Delivery fee</td><td class="text-right text-nowrap"><?=number_format($Order['delivery_fee'])?></td></tr>
+                            <tr><td class="text-muted">Delivery fee (rider)</td><td class="text-right text-nowrap"><?=number_format($Order['delivery_fee'])?></td></tr>
                         <? } ?>
                         <tr class="order-total"><td>Total</td><td class="text-right text-nowrap"><?=number_format($Order['total'])?></td></tr>
                     </table>
